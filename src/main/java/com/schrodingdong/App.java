@@ -1,8 +1,10 @@
 package com.schrodingdong;
 
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
+import java.rmi.ServerException;
 
 import javax.crypto.Cipher;
 
@@ -32,6 +34,14 @@ class MyListener {
             listener.createContext("/", (exchange) -> {
                 // Check for token
                 String token = exchange.getRequestHeaders().getFirst("token");
+                InputStream is = exchange.getRequestBody();
+                String requestBody = "";
+                try{
+                    requestBody = readRequestBody(is);
+                } catch(IOException e){
+                    throw new ServerException("Error Reading request Body");
+                }
+                System.out.println(requestBody);
 
                 // Do logic if we have token
                 String result = ""; 
@@ -50,6 +60,14 @@ class MyListener {
         } catch(Exception e) {
             System.out.println(e.getMessage());
         }
+    }
+
+    private String readRequestBody(InputStream is) throws IOException{
+        StringBuilder sb = new StringBuilder();
+        while(is.available() != 0){
+            sb.append(is.read());
+        }
+        return sb.toString();
     }
 
     public void startListener(){
