@@ -59,7 +59,7 @@ class MyListener {
     }
 
     private String doLogic(){
-        String[] cmdArray = {"script.sh"};
+        String[] cmdArray = {"./script.sh"};
         try{
             Process p =  Runtime.getRuntime().exec(cmdArray);
             p.waitFor();
