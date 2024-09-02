@@ -19,7 +19,7 @@ public class App
 
 @SuppressWarnings("restriction")
 class MyListener {
-    private final String HARDCODED_TOKEN = "123";
+    private final String HARDCODED_TOKEN = System.getenv("SECRET_TOKEN");
     private HttpServer listener;
     private String IP;
     private int port;
@@ -59,7 +59,7 @@ class MyListener {
     }
 
     private String doLogic(){
-        String[] cmdArray = {"src/main/java/com/schrodingdong/script.sh"};
+        String[] cmdArray = {"script.sh"};
         try{
             Process p =  Runtime.getRuntime().exec(cmdArray);
             p.waitFor();
