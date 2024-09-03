@@ -10,7 +10,11 @@ import java.security.NoSuchAlgorithmException;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 
-
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonMappingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sun.jdi.InternalException;
 import com.sun.net.httpserver.*;
 public class App 
 {
@@ -23,6 +27,7 @@ public class App
             """;
             
     public static void main(String[] args){
+        System.out.println(args.length); 
         if(args.length < 1 || args.length > 2){
             System.err.println("Wrong Argument length provided");
             System.err.println(USAGE_MESSAGE);
@@ -61,14 +66,24 @@ class MyListener {
     private HttpServer listener;
     private int port;
     private boolean debug;
+    private final ObjectMapper mapper;
 
     public MyListener(int port, boolean debug){
+        this.mapper = new ObjectMapper();
         this.port = port;
         this.debug = debug;
         try {
             this.listener = HttpServer.create(new InetSocketAddress(port), 0);
             listener.createContext("/gh-webhook-listener", (exchange) -> {
                 try{
+                    // Ensure the request is a successful completed workflow
+                    if(!isWorkflowCompleteSuccess(exchange)){
+                        String error = "Not workflow_run.completed";
+                        exchange.sendResponseHeaders(ERROR_STATUS_CODE, error.length());
+                        exchange.getResponseBody().write(error.getBytes());
+                        throw new Exception(error);
+                    }
+
                     // Get Request body
                     byte[] requestBodyRaw = null;
                     try{
@@ -80,7 +95,7 @@ class MyListener {
                         throw new Exception(error);
                     }
                     
-                    // Get Heaeder Hash
+                    // Get Header Hash
                     Headers headers = exchange.getRequestHeaders();
                     String requestHash = headers.getFirst("X-Hub-Signature-256");
                     if(requestHash.isBlank() || requestHash == null){
@@ -143,6 +158,34 @@ class MyListener {
             if(debug)
                 e.printStackTrace();
         }
+    }
+
+    private boolean isWorkflowCompleteSuccess(HttpExchange exchange) throws InternalException {
+        // Read Body
+        InputStream is = exchange.getRequestBody();
+        String bodyString = "";
+        try {
+            bodyString = new String(is.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            String err = "Error reading and parsing body request";
+            throw new InternalException(err);
+        }
+
+        // Parse to JSON
+        JsonNode bodyNode = null;
+        try {
+            bodyNode = mapper.readTree(bodyString);
+        } catch (Exception e) {
+            String err = "Error Mapping body to JSON";
+            throw new InternalException(err);
+        }
+
+        // Get payload values
+        String action = bodyNode.get("action").textValue();
+        String conclusion = bodyNode.get("conclusion").textValue();
+        if(action == null || conclusion == null) 
+            return false;
+        return action.equals("completed") && conclusion.equals("success");
     }
 
     public void startListener(){
