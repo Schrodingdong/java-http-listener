@@ -1,3 +1,4 @@
 script.sh
 target
 .vscode
+dependency-reduced-pom.xml
