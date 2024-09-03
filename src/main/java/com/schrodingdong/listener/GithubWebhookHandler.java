@@ -1,6 +1,10 @@
-package com.schrodingdong.handler;
+package com.schrodingdong.listener;
 
 import java.io.IOException;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
@@ -9,17 +13,17 @@ import com.schrodingdong.util.GitHubWebhookValidator;
 import com.sun.jdi.InternalException;
 import com.sun.net.httpserver.Headers;
 
-public class GithubWebhookListener implements HttpHandler{
+public class GithubWebhookHandler implements HttpHandler{
     private final ObjectMapper mapper;
     private final String SECRET_TOKEN = System.getenv("SECRET_TOKEN");
     private final int SUCCESS_STATUS_CODE = 200;
     private final int ERROR_STATUS_CODE = 500;
     private final int FORBIDDEN_STATUS_CODE = 403;
-    private boolean debug;
+    private final Logger logger;
 
-    public GithubWebhookListener(boolean debug){
-        this.debug = debug;
+    public GithubWebhookHandler(){
         this.mapper = new ObjectMapper();
+        this.logger = LoggerFactory.getLogger(GithubWebhookHandler.class);
     }
 
     @Override
@@ -83,7 +87,7 @@ public class GithubWebhookListener implements HttpHandler{
             // All good, execute logic
             try {
                 long pid = doLogicInProcesss();
-                System.out.println("Started sub-process, of pid: " + Long.toString(pid));
+                logger.info("Started sub-process, of pid: " + Long.toString(pid));
                 exchange.sendResponseHeaders(SUCCESS_STATUS_CODE, -1);
             } catch (Exception e) {
                 String error = "Error executing script";
@@ -92,9 +96,7 @@ public class GithubWebhookListener implements HttpHandler{
                 throw e; 
             }
         } catch(Exception e){
-            System.err.println(e.getMessage());
-            if(debug)
-                e.printStackTrace();
+            logger.error(e.getMessage(), e);
         } finally {
             exchange.close();
         }
