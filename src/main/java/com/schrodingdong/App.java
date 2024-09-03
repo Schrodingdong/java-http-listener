@@ -16,27 +16,38 @@ public class App
 {
     static final String USAGE_MESSAGE = """
             usage:
-                java -jar github-webhook-listener <HOST> <PORT>
+                java -jar github-webhook-listener <PORT> <DEBUG>
+            where:
+                PORT  - (long) Port to open to listen to request
+                DEBUG - (TRUE or FALSE (default)) Allow errors and stack trace to show 
             """;
             
     public static void main(String[] args){
-        if(args.length != 2){
+        if(args.length < 1 || args.length > 2){
             System.err.println("Wrong Argument length provided");
             System.err.println(USAGE_MESSAGE);
+            return;
         }
 
-        String host = "";
         int port = 0;
+        boolean debug = false;
         try{
-            host = args[0];
-            port = Integer.parseInt(args[1]);
+            port = Integer.parseInt(args[0]);
         } catch(Exception e){
             System.err.println("Error parsing arguments");
             System.err.println(USAGE_MESSAGE);
+            return;
+        }
+        try{
+            String debugArg = args[1];
+            if(debugArg == "TRUE")
+                debug = true;
+        } catch(IndexOutOfBoundsException e){
+            System.out.println("Debug set to FALSE");
         }
 
         // Create server listener
-        MyListener listener = new MyListener(host, port);
+        MyListener listener = new MyListener(port, debug);
         listener.startListener();
     }
 }
@@ -48,12 +59,12 @@ class MyListener {
     private final int ERROR_STATUS_CODE = 500;
     private final int FORBIDDEN_STATUS_CODE = 403;
     private HttpServer listener;
-    private String IP;
     private int port;
+    private boolean debug;
 
-    public MyListener(String IP, int port){
-        this.IP = IP;
+    public MyListener(int port, boolean debug){
         this.port = port;
+        this.debug = debug;
         try {
             this.listener = HttpServer.create(new InetSocketAddress(port), 0);
             listener.createContext("/gh-webhook-listener", (exchange) -> {
@@ -63,18 +74,20 @@ class MyListener {
                     try{
                         requestBodyRaw = readRequestBody(exchange);
                     } catch(IOException e){
-                        System.err.println("Error Reading request Body");
-                        exchange.sendResponseHeaders(ERROR_STATUS_CODE, -1);
-                        return;
+                        String error = "Error Reading request Body";
+                        exchange.sendResponseHeaders(ERROR_STATUS_CODE, error.length());
+                        exchange.getResponseBody().write(error.getBytes());
+                        throw new Exception(error);
                     }
                     
                     // Get Heaeder Hash
                     Headers headers = exchange.getRequestHeaders();
                     String requestHash = headers.getFirst("X-Hub-Signature-256");
-                    if(requestHash == "" || requestHash.isEmpty()){
-                        System.err.println("No header 'X-Hub-Signature-256' present in the incomming request.");
-                        exchange.sendResponseHeaders(FORBIDDEN_STATUS_CODE, -1);
-                        return;
+                    if(requestHash.isBlank() || requestHash == null){
+                        String error = "No header 'X-Hub-Signature-256' present in the incomming request.";
+                        exchange.sendResponseHeaders(FORBIDDEN_STATUS_CODE, error.length());
+                        exchange.getResponseBody().write(error.getBytes());
+                        throw new Exception(error);
                     }
 
                     // Calculate Body Hash
@@ -82,39 +95,58 @@ class MyListener {
                     try {
                         bodyHash = "sha256=" + calculateHMAC(requestBodyRaw, SECRET_TOKEN);
                     } catch (NoSuchAlgorithmException e) {
-                        System.err.println("No such algorithm");
-                        exchange.sendResponseHeaders(ERROR_STATUS_CODE, -1);
-                        return;
+                        String error = "No such algorithm";
+                        exchange.sendResponseHeaders(ERROR_STATUS_CODE, error.length());
+                        exchange.getResponseBody().write(error.getBytes());
+                        throw new Exception(error);
                     } catch(InvalidKeyException e) {
-                        System.err.println("Invalid Key");
-                        exchange.sendResponseHeaders(port, port);
-                        exchange.sendResponseHeaders(ERROR_STATUS_CODE, -1);
-                        return;
+                        String error = "Invalid Key";
+                        exchange.sendResponseHeaders(ERROR_STATUS_CODE, error.length());
+                        exchange.getResponseBody().write(error.getBytes());
+                        throw new Exception(error);
+                    } catch(Exception e){
+                        String error = "Error calculating hash";
+                        exchange.sendResponseHeaders(ERROR_STATUS_CODE, error.length());
+                        exchange.getResponseBody().write(error.getBytes());
+                        throw new Exception(error);
                     }
 
                     // Verify Hash
                     if(!requestHash.equals(bodyHash)){
-                        System.err.println("Different hashes:");
-                        System.err.println(requestHash);
-                        System.err.println(bodyHash);
-                        exchange.sendResponseHeaders(FORBIDDEN_STATUS_CODE, -1);
-                        return;
+                        String error = "Different hashes";
+                        exchange.sendResponseHeaders(FORBIDDEN_STATUS_CODE, error.length());
+                        exchange.getResponseBody().write(error.getBytes());
+                        throw new Exception(error);
                     }
 
                     // All good, execute logic
-                    doLogic();
-                    exchange.sendResponseHeaders(SUCCESS_STATUS_CODE, -1);
+                    try {
+                        long pid = doLogicInProcesss();
+                        System.out.println("Started sub-process, of pid: " + Long.toString(pid));
+                        exchange.sendResponseHeaders(SUCCESS_STATUS_CODE, -1);
+                    } catch (Exception e) {
+                        String error = "Error executing script";
+                        exchange.sendResponseHeaders(ERROR_STATUS_CODE, error.length());
+                        exchange.getResponseBody().write(error.getBytes());
+                        throw new Exception(error);
+                    }
+                } catch(Exception e){
+                    System.err.println(e.getMessage());
+                    if(debug)
+                        e.printStackTrace();
                 } finally {
                     exchange.close();
                 }
             });
         } catch(Exception e) {
             System.out.println(e.getMessage());
+            if(debug)
+                e.printStackTrace();
         }
     }
 
     public void startListener(){
-        System.err.println(String.format("Start Listner on %s:%d", IP, port));
+        System.err.println(String.format("Start Listner on port %d ...", port));
         listener.setExecutor(null); // creates a default executor
         listener.start();
     }
@@ -149,19 +181,9 @@ class MyListener {
     }
 
 
-    private String doLogic(){
+    private long doLogicInProcesss() throws Exception{
         String[] cmdArray = {"./script.sh"};
-        try{
-            Process p =  Runtime.getRuntime().exec(cmdArray);
-            p.waitFor();
-            InputStream stream = p.getInputStream();
-            String out = "";
-            while(stream.available() != 0){
-                out += (char) stream.read();
-            }
-            return "Script executed successfully: " + out;
-        } catch(Exception e) {
-            return "Error Executing the script: " + e.getMessage();
-        }
+        Process p = Runtime.getRuntime().exec(cmdArray);
+        return p.pid();
     } 
 }
