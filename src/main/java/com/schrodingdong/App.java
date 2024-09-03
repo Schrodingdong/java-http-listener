@@ -191,8 +191,15 @@ class MyListener {
         }
 
         // Get payload values
-        String action = bodyNode.get("action").textValue();
-        String conclusion = bodyNode.get("conclusion").textValue();
+        String action = "";
+        String conclusion = "";
+        try {
+            action = bodyNode.get("action").textValue();
+            conclusion = bodyNode.get("workflow_run").get("conclusion").textValue();
+        } catch (Exception e) {
+            String err = e.getMessage();
+            throw new InternalException(err);
+        }
         if(action == null || conclusion == null) 
             return false;
         return action.equals("completed") && conclusion.equals("success");
