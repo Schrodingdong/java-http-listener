@@ -77,7 +77,17 @@ class MyListener {
             listener.createContext("/gh-webhook-listener", (exchange) -> {
                 try{
                     // Ensure the request is a successful completed workflow
-                    if(!isWorkflowCompleteSuccess(exchange)){
+                    boolean isWorkflowCompleteSuccess = false;
+                    try {
+                        isWorkflowCompleteSuccess = isWorkflowCompleteSuccess(exchange);
+                    } catch (InternalError e) {
+                        String error = e.getMessage();
+                        exchange.sendResponseHeaders(ERROR_STATUS_CODE, error.length());
+                        exchange.getResponseBody().write(error.getBytes());
+                        throw new Exception(error);
+                    }
+
+                    if(!isWorkflowCompleteSuccess){
                         String error = "Not workflow_run.completed";
                         exchange.sendResponseHeaders(ERROR_STATUS_CODE, error.length());
                         exchange.getResponseBody().write(error.getBytes());
