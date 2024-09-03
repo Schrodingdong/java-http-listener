@@ -2,26 +2,46 @@ package com.schrodingdong;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.net.InetSocketAddress;
-import java.rmi.ServerException;
+import java.security.InvalidKeyException;
+import java.security.NoSuchAlgorithmException;
 
-import javax.crypto.Cipher;
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 
 import com.sun.net.httpserver.*;
 public class App 
 {
+    static final String USAGE_MESSAGE = """
+            usage:
+                java -jar github-webhook-listener <HOST> <PORT>
+            """;
+            
     public static void main(String[] args){
+        if(args.length != 2){
+            System.err.println("Wrong Argument length provided");
+            System.err.println(USAGE_MESSAGE);
+        }
+
+        String host = "";
+        int port = 0;
+        try{
+            host = args[0];
+            port = Integer.parseInt(args[1]);
+        } catch(Exception e){
+            System.err.println("Error parsing arguments");
+            System.err.println(USAGE_MESSAGE);
+        }
+
         // Create server listener
-        MyListener listener = new MyListener("localhost", 8888);
+        MyListener listener = new MyListener(host, port);
         listener.startListener();
     }
 }
 
 
-@SuppressWarnings("restriction")
 class MyListener {
-    private final String HARDCODED_TOKEN = System.getenv("SECRET_TOKEN");
+    private final String SECRET_TOKEN = System.getenv("SECRET_TOKEN");
     private HttpServer listener;
     private String IP;
     private int port;
@@ -31,35 +51,86 @@ class MyListener {
         this.port = port;
         try {
             this.listener = HttpServer.create(new InetSocketAddress(port), 0);
-            listener.createContext("/", (exchange) -> {
-                // Check for token
-                String token = exchange.getRequestHeaders().getFirst("token");
+            listener.createContext("/gh-webhook-listener", (exchange) -> {
+                // Get Request body
                 InputStream is = exchange.getRequestBody();
-                String requestBody = "";
+                String requestBodyRaw = "";
                 try{
-                    requestBody = readRequestBody(is);
+                    requestBodyRaw = readRequestBody(is);
                 } catch(IOException e){
-                    throw new ServerException("Error Reading request Body");
+                    System.err.println("Error Reading request Body");
+                    exchange.close();
+                    return;
                 }
-                System.out.println(requestBody);
+                
+                // Get Heaeder Hash
+                Headers headers = exchange.getRequestHeaders();
+                String requestHash = headers.getFirst("X-Hub-Signature-256");
+                if(requestHash == "" || requestHash.isEmpty()){
+                    System.err.println("No header 'X-Hub-Signature-256' present in the incomming request.");
+                    exchange.close();
+                    return;
+                }
 
-                // Do logic if we have token
-                String result = ""; 
-                if(token.equals(HARDCODED_TOKEN)){
-                    result = doLogic();
-                    exchange.sendResponseHeaders(200, result.length());
-                } else {
-                    result = "Wrong token";
-                    exchange.sendResponseHeaders(401, result.length());
+                // Calculate Body Hash
+                String bodyHash = "";
+                try {
+                    bodyHash = "sha256=" + calculateHMAC(requestBodyRaw.getBytes(), SECRET_TOKEN);
+                } catch (NoSuchAlgorithmException e) {
+                    System.err.println("No such algorithm");
+                    exchange.close();
+                    return;
+                } catch(InvalidKeyException e) {
+                    System.err.println("Invalid Key");
+                    exchange.close();
+                    return;
                 }
-                // Return result
-                OutputStream reqBodyOutputStream =  exchange.getResponseBody();
-                reqBodyOutputStream.write(result.getBytes());
-                exchange.close();
+
+                // Verify Hash
+                if(!requestHash.equals(bodyHash)){
+                    System.err.println("Different hashes:");
+                    System.err.println(requestHash);
+                    System.err.println(bodyHash);
+                    exchange.close();
+                    return;
+                }
+
+                // All good, execute logic
+                doLogic();
             });
         } catch(Exception e) {
             System.out.println(e.getMessage());
         }
+    }
+
+    public void startListener(){
+        System.err.println(String.format("Start Listner on %s:%d", IP, port));
+        listener.setExecutor(null); // creates a default executor
+        listener.start();
+    }
+
+    private static String calculateHMAC(byte[] data, String key) throws NoSuchAlgorithmException, InvalidKeyException {
+        Mac sha256_HMAC = Mac.getInstance("HmacSHA256");
+        SecretKeySpec secretKey = new SecretKeySpec(key.getBytes(), "HmacSHA256");
+        sha256_HMAC.init(secretKey);
+
+        // Compute the HMAC for the payload
+        byte[] hmacData = sha256_HMAC.doFinal(data);
+
+        // Convert the HMAC to a hexadecimal string
+        return bytesToHex(hmacData);
+    }
+
+    private static String bytesToHex(byte[] bytes) {
+        StringBuilder hexString = new StringBuilder(2 * bytes.length);
+        for (byte b : bytes) {
+            String hex = Integer.toHexString(0xff & b);
+            if (hex.length() == 1) {
+                hexString.append('0');
+            }
+            hexString.append(hex);
+        }
+        return hexString.toString();
     }
 
     private String readRequestBody(InputStream is) throws IOException{
@@ -70,11 +141,6 @@ class MyListener {
         return sb.toString();
     }
 
-    public void startListener(){
-        System.err.println(String.format("Start Listner on %s:%d", IP, port));
-        listener.setExecutor(null); // creates a default executor
-        listener.start();
-    }
 
     private String doLogic(){
         String[] cmdArray = {"./script.sh"};
@@ -92,4 +158,3 @@ class MyListener {
         }
     } 
 }
-
