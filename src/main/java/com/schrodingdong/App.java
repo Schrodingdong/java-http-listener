@@ -1,21 +1,25 @@
 package com.schrodingdong;
 
+import java.io.BufferedInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
+import java.util.Arrays;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonMappingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.schrodingdong.util.GitHubWebhookValidator;
 import com.sun.jdi.InternalException;
-import com.sun.net.httpserver.*;
+import com.sun.net.httpserver.Headers;
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpServer;
 public class App 
 {
     static final String USAGE_MESSAGE = """
@@ -45,8 +49,9 @@ public class App
         }
         try{
             String debugArg = args[1];
-            if(debugArg == "TRUE")
+            if(debugArg.toUpperCase().equals("TRUE"))
                 debug = true;
+            System.out.println("Debug set to TRUE");
         } catch(IndexOutOfBoundsException e){
             System.out.println("Debug set to FALSE");
         }
@@ -76,17 +81,29 @@ class MyListener {
             this.listener = HttpServer.create(new InetSocketAddress(port), 0);
             listener.createContext("/gh-webhook-listener", (exchange) -> {
                 try{
+                    // Get Request body
+                    byte[] requestBodyBytes = null;
+                    try{
+                        requestBodyBytes = readRequestBodyBytes(exchange);
+                    } catch(IOException e){
+                        String error = "Error Reading request Body";
+                        exchange.sendResponseHeaders(ERROR_STATUS_CODE, error.length());
+                        exchange.getResponseBody().write(error.getBytes());
+                        throw new Exception(error);
+                    }
+                    String requestBodyRequest = new String(requestBodyBytes);
+
+
                     // Ensure the request is a successful completed workflow
                     boolean isWorkflowCompleteSuccess = false;
                     try {
-                        isWorkflowCompleteSuccess = isWorkflowCompleteSuccess(exchange);
+                        isWorkflowCompleteSuccess = isWorkflowCompleteSuccess(requestBodyRequest);
                     } catch (InternalError e) {
                         String error = e.getMessage();
                         exchange.sendResponseHeaders(ERROR_STATUS_CODE, error.length());
                         exchange.getResponseBody().write(error.getBytes());
                         throw new Exception(error);
                     }
-
                     if(!isWorkflowCompleteSuccess){
                         String error = "Not workflow_run.completed";
                         exchange.sendResponseHeaders(ERROR_STATUS_CODE, error.length());
@@ -94,16 +111,6 @@ class MyListener {
                         throw new Exception(error);
                     }
 
-                    // Get Request body
-                    byte[] requestBodyRaw = null;
-                    try{
-                        requestBodyRaw = readRequestBody(exchange);
-                    } catch(IOException e){
-                        String error = "Error Reading request Body";
-                        exchange.sendResponseHeaders(ERROR_STATUS_CODE, error.length());
-                        exchange.getResponseBody().write(error.getBytes());
-                        throw new Exception(error);
-                    }
                     
                     // Get Header Hash
                     Headers headers = exchange.getRequestHeaders();
@@ -116,30 +123,15 @@ class MyListener {
                     }
 
                     // Calculate Body Hash
-                    String bodyHash = "";
                     try {
-                        bodyHash = "sha256=" + calculateHMAC(requestBodyRaw, SECRET_TOKEN);
-                    } catch (NoSuchAlgorithmException e) {
-                        String error = "No such algorithm";
+                        GitHubWebhookValidator.validateGitHubWebhook(
+                            requestBodyBytes, 
+                            SECRET_TOKEN, 
+                            requestHash
+                        );
+                    } catch (SecurityException e) {
+                        String error = "Error validating hash: " + e.getMessage();
                         exchange.sendResponseHeaders(ERROR_STATUS_CODE, error.length());
-                        exchange.getResponseBody().write(error.getBytes());
-                        throw new Exception(error);
-                    } catch(InvalidKeyException e) {
-                        String error = "Invalid Key";
-                        exchange.sendResponseHeaders(ERROR_STATUS_CODE, error.length());
-                        exchange.getResponseBody().write(error.getBytes());
-                        throw new Exception(error);
-                    } catch(Exception e){
-                        String error = "Error calculating hash";
-                        exchange.sendResponseHeaders(ERROR_STATUS_CODE, error.length());
-                        exchange.getResponseBody().write(error.getBytes());
-                        throw new Exception(error);
-                    }
-
-                    // Verify Hash
-                    if(!requestHash.equals(bodyHash)){
-                        String error = "Different hashes";
-                        exchange.sendResponseHeaders(FORBIDDEN_STATUS_CODE, error.length());
                         exchange.getResponseBody().write(error.getBytes());
                         throw new Exception(error);
                     }
@@ -170,17 +162,7 @@ class MyListener {
         }
     }
 
-    private boolean isWorkflowCompleteSuccess(HttpExchange exchange) throws InternalException {
-        // Read Body
-        InputStream is = exchange.getRequestBody();
-        String bodyString = "";
-        try {
-            bodyString = new String(is.readAllBytes(), StandardCharsets.UTF_8);
-        } catch (Exception e) {
-            String err = "Error reading and parsing body request";
-            throw new InternalException(err);
-        }
-
+    private boolean isWorkflowCompleteSuccess(String bodyString) throws InternalException {
         // Parse to JSON
         JsonNode bodyNode = null;
         try {
@@ -211,13 +193,13 @@ class MyListener {
         listener.start();
     }
 
-    private static String calculateHMAC(byte[] data, String key) throws NoSuchAlgorithmException, InvalidKeyException {
+    private static String calculateHMAC(String data, String key) throws NoSuchAlgorithmException, InvalidKeyException {
         Mac sha256_HMAC = Mac.getInstance("HmacSHA256");
         SecretKeySpec secretKey = new SecretKeySpec(key.getBytes(StandardCharsets.UTF_8), "HmacSHA256");
         sha256_HMAC.init(secretKey);
 
         // Compute the HMAC for the payload
-        byte[] hmacData = sha256_HMAC.doFinal(data);
+        byte[] hmacData = sha256_HMAC.doFinal(data.getBytes());
 
         // Convert the HMAC to a hexadecimal string
         return bytesToHex(hmacData);
@@ -235,9 +217,8 @@ class MyListener {
         return hexString.toString();
     }
 
-    private byte[] readRequestBody(HttpExchange exchange) throws IOException, OutOfMemoryError{
-        InputStream is = exchange.getRequestBody();
-        return is.readAllBytes();
+    private byte[] readRequestBodyBytes(HttpExchange exchange) throws IOException, OutOfMemoryError{
+        return exchange.getRequestBody().readAllBytes();
     }
 
 
