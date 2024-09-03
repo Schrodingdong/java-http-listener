@@ -44,6 +44,9 @@ public class App
 
 class MyListener {
     private final String SECRET_TOKEN = System.getenv("SECRET_TOKEN");
+    private final int SUCCESS_STATUS_CODE = 200;
+    private final int ERROR_STATUS_CODE = 500;
+    private final int FORBIDDEN_STATUS_CODE = 403;
     private HttpServer listener;
     private String IP;
     private int port;
@@ -54,50 +57,56 @@ class MyListener {
         try {
             this.listener = HttpServer.create(new InetSocketAddress(port), 0);
             listener.createContext("/gh-webhook-listener", (exchange) -> {
-                // Get Request body
-                byte[] requestBodyRaw = null;
                 try{
-                    requestBodyRaw = readRequestBody(exchange);
-                } catch(IOException e){
-                    System.err.println("Error Reading request Body");
-                    exchange.close();
-                    return;
-                }
-                
-                // Get Heaeder Hash
-                Headers headers = exchange.getRequestHeaders();
-                String requestHash = headers.getFirst("X-Hub-Signature-256");
-                if(requestHash == "" || requestHash.isEmpty()){
-                    System.err.println("No header 'X-Hub-Signature-256' present in the incomming request.");
-                    exchange.close();
-                    return;
-                }
+                    // Get Request body
+                    byte[] requestBodyRaw = null;
+                    try{
+                        requestBodyRaw = readRequestBody(exchange);
+                    } catch(IOException e){
+                        System.err.println("Error Reading request Body");
+                        exchange.sendResponseHeaders(ERROR_STATUS_CODE, -1);
+                        return;
+                    }
+                    
+                    // Get Heaeder Hash
+                    Headers headers = exchange.getRequestHeaders();
+                    String requestHash = headers.getFirst("X-Hub-Signature-256");
+                    if(requestHash == "" || requestHash.isEmpty()){
+                        System.err.println("No header 'X-Hub-Signature-256' present in the incomming request.");
+                        exchange.sendResponseHeaders(FORBIDDEN_STATUS_CODE, -1);
+                        return;
+                    }
 
-                // Calculate Body Hash
-                String bodyHash = "";
-                try {
-                    bodyHash = "sha256=" + calculateHMAC(requestBodyRaw, SECRET_TOKEN);
-                } catch (NoSuchAlgorithmException e) {
-                    System.err.println("No such algorithm");
-                    exchange.close();
-                    return;
-                } catch(InvalidKeyException e) {
-                    System.err.println("Invalid Key");
-                    exchange.close();
-                    return;
-                }
+                    // Calculate Body Hash
+                    String bodyHash = "";
+                    try {
+                        bodyHash = "sha256=" + calculateHMAC(requestBodyRaw, SECRET_TOKEN);
+                    } catch (NoSuchAlgorithmException e) {
+                        System.err.println("No such algorithm");
+                        exchange.sendResponseHeaders(ERROR_STATUS_CODE, -1);
+                        return;
+                    } catch(InvalidKeyException e) {
+                        System.err.println("Invalid Key");
+                        exchange.sendResponseHeaders(port, port);
+                        exchange.sendResponseHeaders(ERROR_STATUS_CODE, -1);
+                        return;
+                    }
 
-                // Verify Hash
-                if(!requestHash.equals(bodyHash)){
-                    System.err.println("Different hashes:");
-                    System.err.println(requestHash);
-                    System.err.println(bodyHash);
-                    exchange.close();
-                    return;
-                }
+                    // Verify Hash
+                    if(!requestHash.equals(bodyHash)){
+                        System.err.println("Different hashes:");
+                        System.err.println(requestHash);
+                        System.err.println(bodyHash);
+                        exchange.sendResponseHeaders(FORBIDDEN_STATUS_CODE, -1);
+                        return;
+                    }
 
-                // All good, execute logic
-                doLogic();
+                    // All good, execute logic
+                    doLogic();
+                    exchange.sendResponseHeaders(SUCCESS_STATUS_CODE, -1);
+                } finally {
+                    exchange.close();
+                }
             });
         } catch(Exception e) {
             System.out.println(e.getMessage());
