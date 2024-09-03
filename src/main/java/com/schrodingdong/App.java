@@ -3,11 +3,13 @@ package com.schrodingdong;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
+
 
 import com.sun.net.httpserver.*;
 public class App 
@@ -53,10 +55,9 @@ class MyListener {
             this.listener = HttpServer.create(new InetSocketAddress(port), 0);
             listener.createContext("/gh-webhook-listener", (exchange) -> {
                 // Get Request body
-                InputStream is = exchange.getRequestBody();
-                String requestBodyRaw = "";
+                byte[] requestBodyRaw = null;
                 try{
-                    requestBodyRaw = readRequestBody(is);
+                    requestBodyRaw = readRequestBody(exchange);
                 } catch(IOException e){
                     System.err.println("Error Reading request Body");
                     exchange.close();
@@ -75,7 +76,7 @@ class MyListener {
                 // Calculate Body Hash
                 String bodyHash = "";
                 try {
-                    bodyHash = "sha256=" + calculateHMAC(requestBodyRaw.getBytes(), SECRET_TOKEN);
+                    bodyHash = "sha256=" + calculateHMAC(requestBodyRaw, SECRET_TOKEN);
                 } catch (NoSuchAlgorithmException e) {
                     System.err.println("No such algorithm");
                     exchange.close();
@@ -111,7 +112,7 @@ class MyListener {
 
     private static String calculateHMAC(byte[] data, String key) throws NoSuchAlgorithmException, InvalidKeyException {
         Mac sha256_HMAC = Mac.getInstance("HmacSHA256");
-        SecretKeySpec secretKey = new SecretKeySpec(key.getBytes(), "HmacSHA256");
+        SecretKeySpec secretKey = new SecretKeySpec(key.getBytes(StandardCharsets.UTF_8), "HmacSHA256");
         sha256_HMAC.init(secretKey);
 
         // Compute the HMAC for the payload
@@ -133,12 +134,9 @@ class MyListener {
         return hexString.toString();
     }
 
-    private String readRequestBody(InputStream is) throws IOException{
-        StringBuilder sb = new StringBuilder();
-        while(is.available() != 0){
-            sb.append(is.read());
-        }
-        return sb.toString();
+    private byte[] readRequestBody(HttpExchange exchange) throws IOException, OutOfMemoryError{
+        InputStream is = exchange.getRequestBody();
+        return is.readAllBytes();
     }
 
 
