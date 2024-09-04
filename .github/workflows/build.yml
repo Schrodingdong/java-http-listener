@@ -42,8 +42,8 @@ jobs:
       with:
         draft: false
         prerelease: false
-        release_name: ${{ steps.version.outputs.version }}
-        tag_name: ${{ github.ref }}
+        name: ${{ steps.version.outputs.version }}
+        tag: ${{ github.ref }}
       env:
         GITHUB_TOKEN: ${{ github.token }}
     - name: Upload JAR
@@ -54,5 +54,4 @@ jobs:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
         asset_path: target/*.jar
         asset_name: github-webhook-listener.jar
-        asset_content_type: application/jar
                 
